@@ -308,9 +308,6 @@ Welcome to PyKOS!
 Phase 0: Bootstrapping complete.
 ```
 
-**Congratulations! You have successfully built and booted a custom operating system kernel.** This provides the solid foundation upon which we will build all the more advanced features, starting with memory management and interrupt handling in **Phase 1**.
-Excellent. With Phase 0 complete, we have a bootable kernel. Now, let's evolve it from a simple "Hello, World!" program into a true operating system core.
-
 
 ### **Phase 1: Core Kernel Services (Memory & Interrupts)**
 
@@ -598,4 +595,3 @@ Caught Interrupt: 0
 ```
 ...and then the system will hang inside our `isr_handler`, as intended.
 
-**Congratulations on completing Phase 1.** We now have a kernel that is in full 64-bit mode, can respond to events, and has a foundational system for managing memory. This is the solid bedrock upon which we can now build a multitasking scheduler in **Phase 2**.
