@@ -9,56 +9,54 @@
 
 This diagram illustrates the fundamental separation of privilege and the key components of PyKOS.
 
-```mermaid
-graph TD
+```graph TD
     subgraph "Hardware (Physical or Emulated)"
-        CPU
-        RAM
-        Disk
-        Keyboard
-        Serial
+        CPU["CPU"]
+        RAM["RAM"]
+        Disk["Disk"]
+        Keyboard["Keyboard"]
+        Serial["Serial Port"]
     end
 
     subgraph "PyKOS Kernel (C++ | Ring 0)"
-        A[Bootloader - GRUB] --> B(Kernel Entry);
-        B --> C{Core Initialization};
-        C --> D[GDT & IDT Setup];
-        D --> E[Interrupt & Exception Handlers];
-        C --> F[Physical & Virtual Memory Mgmt];
-        F --> G[Paging & Page Frame Allocator];
-        C --> H[Scheduler & Process Mgmt];
-        H --> I[Process Table];
-        C --> J[Device Drivers];
-        J --> J1(Keyboard);
-        J --> J2(Serial/TTY);
-        J --> J3(VGA Text);
-        J --> J4(ATA Block Device);
-        C --> K[VFS Layer];
-        K --> L[devfs];
-        K --> M[PyFS Filesystem];
-        M --> J4;
-        L --> J1;
-        L --> J2;
-        L --> J3;
-        C --> N[IPC Manager - Pipes];
-        C --> O[Syscall Handler];
+        A[Bootloader - GRUB] --> B{Core Initialization};
+        B --> C[GDT & IDT Setup];
+        C --> D[Interrupt & Exception Handlers];
+        B --> E[Physical & Virtual Memory Mgmt];
+        E --> F[Paging & Page Frame Allocator];
+        B --> G[Scheduler & Process Mgmt];
+        G --> H[Process Table];
+        B --> I[Device Drivers];
+        I --> I1(Keyboard Driver);
+        I --> I2(Serial/TTY Driver);
+        I --> I3(VGA Text Driver);
+        I --> I4(ATA Block Device Driver);
+        B --> J[VFS Layer];
+        J --> K[devfs];
+        J --> L[PyFS Filesystem];
+        L --> I4;
+        K --> I1;
+        K --> I2;
+        K --> I3;
+        B --> M[IPC Manager - Pipes];
+        B --> N[Syscall Handler];
     end
 
     subgraph "User Space (Python | Ring 3)"
-        P[Python Interpreter & StdLib];
-        P --> Q[Python Shell (init.py)];
-        Q --"fork() / exec()"--> R(User Scripts);
-        R --"open/read/write"--> O;
-        Q --"open/read/write"--> O;
-        Q --"pipe()"--> O;
+        O[Python Interpreter & StdLib];
+        O --> P[Python Shell (init.py)];
+        P --"fork() / exec()"--> Q[User Scripts];
+        Q --"File I/O"--> N;
+        P --"File I/O"--> N;
+        P --"pipe()"--> N;
     end
 
-    O -- "Syscall/Sysret ABI" -- P;
+    N -- "Syscall/Sysret ABI" -- O;
     
     style CPU fill:#f9f,stroke:#333,stroke-width:2px
     style B fill:#bbf,stroke:#333,stroke-width:2px
-    style O fill:#ff9,stroke:#333,stroke-width:4px
-    style P fill:#9f9,stroke:#333,stroke-width:2px
+    style N fill:#ff9,stroke:#333,stroke-width:4px
+    style O fill:#9f9,stroke:#333,stroke-width:2px
 ```
 
 ---
