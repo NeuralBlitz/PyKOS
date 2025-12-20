@@ -1,88 +1,94 @@
 
 ---
 
-### **Phase 8: Networking Stack**
+### **Phase 11: User and Group Management & Security Context**
 
 #### **Objective:**
-To connect PyKOS to the outside world. This is a highly complex undertaking, so we will start with a minimal implementation of the TCP/IP stack to support basic network communication.
+To transition PyKOS from a single-user system to a true multi-user operating system. This is a foundational step for security and resource isolation.
 
-#### **Step 1: The Network Device Driver**
+#### **Step 1: Kernel Implementation of Users and Groups**
 
-We need a driver for a virtual network card. The **AMD PCnet AM79C973** (PCnet-PCI II) is an excellent choice as it's well-documented and widely supported by emulators like QEMU.
+The kernel needs to be aware of user identities to enforce permissions.
 
-*   **Design: `pcnet` Driver:**
-    1.  **PCI Bus Enumeration:** The kernel needs a simple PCI bus scanner to detect devices. It will iterate through the PCI configuration space to find a device with the correct Vendor and Device ID for the PCnet card.
-    2.  **Driver Initialization:** The driver will claim the device's I/O ports and memory-mapped regions, enable bus mastering, and set up circular buffers (receive and transmit rings) in memory for DMA (Direct Memory Access).
-    3.  **Interrupt Handling:** The driver will register an IRQ handler. When the network card receives a packet, it will trigger an interrupt. The handler will process the receive ring and pass the packet data up to the network stack.
+*   **Design: `User` and `Group` Structures:**
+    1.  **Process Context:** The `Process` class will be extended to include a `uid` (User ID) and a `gid` (Group ID). The `init` process (PID 1) will run as `root` (`uid=0`, `gid=0`).
+    2.  **Authentication Database:** A simple, plaintext file like `/etc/passwd` will be created in PyFS. The kernel will parse this file at boot time to load the user database into memory.
+        *   `/etc/passwd` format: `username:password_hash:uid:gid:user_info:home_dir:shell`
+        *   `/etc/group` format: `groupname:gid:user1,user2,...`
+    3.  **Privilege Model:** The kernel will hard-code the concept of a "superuser" (`uid=0`), which is allowed to bypass certain permission checks.
 
-#### **Step 2: The Network Stack (Layers 2-4)**
+#### **Step 2: Login Service and Session Management**
 
-We will implement a minimal version of the core networking protocols in the C++ kernel.
+We need a way for users to log in. The initial shell should no longer run as root by default.
 
-*   **Design: Layered Network Stack:**
-    1.  **Layer 2 (Data Link):**
-        *   **ARP (Address Resolution Protocol):** Implement ARP to resolve IP addresses to MAC addresses on the local network. The kernel will maintain an ARP cache.
-        *   **Ethernet Frame Handling:** Code to construct and parse Ethernet II frames.
-    2.  **Layer 3 (Network):**
-        *   **IP (Internet Protocol):** Implement IP packet handling, including header creation, checksum calculation, and basic routing (e.g., sending to a gateway if the destination is not local).
-        *   **ICMP (Internet Control Message Protocol):** Implement handlers for ICMP echo requests ("ping") to test network connectivity.
-    3.  **Layer 4 (Transport):**
-        *   **UDP (User Datagram Protocol):** A simple, connectionless protocol. This is the easiest to implement first.
-        *   **TCP (Transmission Control Protocol):** A much more complex, stateful protocol. Implementing TCP involves managing connection states (SYN, ACK, FIN), sequence numbers, windowing for flow control, and retransmission timers.
+*   **Design: The `login` Program:**
+    1.  **New `init` Process:** The kernel will now start a new system service, `/sbin/init`, as PID 1.
+    2.  **`getty` and `login`:** The `init` service will spawn a `getty` process for each terminal (e.g., `/dev/tty`). `getty` will print a "login:" prompt.
+    3.  When a username is entered, `getty` will `exec` a new Python program, `/bin/login`.
+    4.  The `login` program will ask for a password, hash it, and compare it to the hash in `/etc/passwd`.
+    5.  **`setuid()`/`setgid()` Syscalls:** If authentication is successful, `login` will call two new syscalls, `sys_setuid(uid)` and `sys_setgid(gid)`, to change its own user and group identity. This is a privileged operation that the kernel will only allow if the calling process is `root` (which `login` is, as it was spawned by `init`).
+    6.  After dropping privileges, `login` will `exec` the user's specified shell (e.g., `/bin/sh.py`). This new shell process now runs as the logged-in user, not as root.
 
-#### **Step 3: The Socket API**
+#### **Step 3: VFS Permission Enforcement**
 
-This is the VFS-like abstraction that exposes networking to the Python user space.
+All file-related syscalls must now rigorously enforce permissions.
 
-*   **Design: Socket Syscalls:**
-    1.  **`socket()` Syscall:** Creates a new communication endpoint. The kernel creates a `Socket` object in memory and returns a file descriptor for it.
-    2.  **`bind()`, `listen()`, `accept()` Syscalls:** For server-side operations.
-    3.  **`connect()` Syscall:** For client-side operations.
-    4.  **`send()`/`recv()` Syscalls:** These are similar to `write`/`read` but operate on socket file descriptors. The kernel will route the data through the TCP/IP stack and out the network driver.
-*   **Impact:** Our Python user space can now use a familiar `socket` library (a custom `_pykos_socket.py` wrapper around the new syscalls) to create network clients and servers. We could write a simple web server or an IRC client in Python!
+*   **Design: `check_access()` Kernel Function:**
+    *   Before any `sys_read`, `sys_write`, or `sys_open` operation proceeds, the VFS will call an internal `check_access()` function.
+    *   This function takes the process's `uid`/`gid` and the target `VFSNode`'s inode information (owner, group, permission bits).
+    *   It performs the standard UNIX permission check:
+        1.  If process `uid` matches inode `uid`, check user permissions (`rwx---`).
+        2.  Else, if process `gid` matches inode `gid`, check group permissions (`-rwx--`).
+        3.  Otherwise, check "other" permissions (`---rwx`).
+        4.  (Superuser `uid=0` always passes).
+    *   If the check fails, the syscall returns an `EPERM` (Permission Denied) error to the user-space process.
 
 ---
 
-### **Phase 9: A Simple Graphical User Interface (GUI)**
+### **Phase 12: Building a Software Ecosystem**
 
 #### **Objective:**
-To move beyond VGA text mode and implement a basic graphical environment. We will not build a full-fledged windowing system like X11, but a simpler framebuffer-based GUI.
+To create a minimal but functional software ecosystem for PyKOS, including a package manager and a C library to allow non-Python applications to run.
 
-#### **Step 1: The Framebuffer Driver**
+#### **Step 1: The PyKOS C Library (`libpk`)**
 
-Modern bootloaders like GRUB can set up a linear framebuffer (LFB) for the kernel, which is a simple, flat region of memory that directly corresponds to the pixels on the screen.
+To run programs written in C/C++, we need a C standard library that interfaces with our kernel's syscalls.
 
-*   **Design: `lfb` Driver:**
-    1.  **Multiboot Information:** The kernel will query the Multiboot2 info structure provided by GRUB to get the address, resolution (width/height), and pixel format of the framebuffer.
-    2.  **Graphics Context:** The kernel will create a `GraphicsContext` class that provides high-level drawing primitives, such as `draw_pixel(x, y, color)`, `draw_rect(...)`, and `draw_char(...)` (using a bitmapped font).
+*   **Design: `libpk.a`:**
+    1.  **Syscall Wrappers:** Create a set of assembly files (`syscalls.S`) that implement the `syscall` instruction interface for each of PyKOS's syscalls.
+    2.  **Standard Functions:** Implement core `libc` functions (`printf`, `malloc`, `fopen`, `fread`, etc.) in C. These functions will internally call the syscall wrappers.
+        *   `malloc()` will use a new `sbrk()` or `mmap()` syscall to request memory from the kernel.
+        *   `printf()` and `fopen()` will use `write()` and `open()`.
+    3.  **Static Library:** Compile this code into a static library (`libpk.a`). Now, C programs can be compiled with our cross-compiler and statically linked against `libpk.a` to produce a runnable PyKOS binary.
 
-#### **Step 2: A Minimal Window Manager & Compositor**
+#### **Step 2: A Simple Package Manager (`pypkg`)**
 
-This kernel module will manage "windows," which will be simple rectangular regions of the screen.
+A way to install new software is essential.
 
-*   **Design: `WindowManager`:**
-    1.  **Window Struct:** A `Window` struct will store its position, size, and a pointer to its own off-screen buffer.
-    2.  **Compositing:** The `WindowManager` will periodically "compose" the final screen image by copying the contents of each window's buffer to the main framebuffer. This prevents applications from drawing over each other.
-    3.  **Event Handling:** The keyboard and (a new) mouse driver will send their input events to the `WindowManager`. It will determine which window is "in focus" and route the events to the corresponding process.
-
-#### **Step 3: The GUI Syscall Interface**
-
-*   **Design: GUI Syscalls:**
-    1.  **`create_window()`:** A process can request a new window. The kernel returns a file descriptor for it.
-    2.  **`get_window_buffer()`:** Maps the window's off-screen buffer into the process's virtual address space, allowing the user-space program to draw directly into it.
-    3.  **`poll_event()`:** A blocking syscall that waits for a GUI event (like a key press or mouse click) to be delivered to the process.
-*   **Impact:** We can now write simple graphical applications in Python! A `py_tkinter.py` library could be created to wrap these syscalls, allowing a user to write a basic text editor or a simple game.
+*   **Design: `pypkg` (written in Python):**
+    1.  **Package Format:** Define a simple package format, perhaps a `.tar.gz` archive containing a `package.json` manifest file. The manifest lists the files to be installed and their destinations (e.g., `/bin`, `/lib`).
+    2.  **Repository:** A simple HTTP server on the host machine can serve as the package repository.
+    3.  **`pypkg` Logic:**
+        *   `pypkg install <package>`: Downloads the package archive using the new networking stack.
+        *   It verifies the package's checksum and signature (for security).
+        *   It extracts the files into the PyFS filesystem according to the manifest.
+*   **Impact:** Users can now easily extend the functionality of their PyKOS system by installing new command-line tools, libraries, or even graphical applications.
 
 ---
 
-### **Phase 10: Expanding Hardware Support**
+### **Phase 13: System Boot and Service Management**
 
 #### **Objective:**
-To make PyKOS run on more than just the most basic emulated hardware.
+To replace our simple `init` process with a more robust System V-style or `systemd`-like service manager.
 
-*   **Design:**
-    1.  **USB Driver Stack:** This is a major undertaking. It involves writing a host controller driver (e.g., for UHCI or EHCI), a USB hub driver, and then class drivers for specific devices like USB keyboards, mice, and mass storage devices.
-    2.  **AHCI SATA Driver:** To support modern SATA hard disks, replacing the legacy ATA PATA driver.
-    3.  **APIC & SMP Support:** Move from the old PIC to the modern APIC (Advanced Programmable Interrupt Controller) to support multiple CPU cores (Symmetric Multiprocessing). This requires significant changes to the scheduler to make it SMP-safe (using locks) and to distribute processes across cores.
+*   **Design: `init` as a Service Manager:**
+    1.  **Runlevels/Targets:** Define different system states, like `single-user.target` (for maintenance) and `multi-user.target` (the default).
+    2.  **Service Scripts:** Create a directory like `/etc/init.d/` containing simple shell scripts (or Python scripts) for starting, stopping, and checking the status of system daemons (like `loggerd`).
+    3.  **`init` Logic:**
+        *   On boot, `init` (PID 1) determines the target runlevel.
+        *   It executes the scripts in `/etc/init.d/` in a defined order to start system services.
+        *   It then starts the `getty` processes for user logins.
+        *   It adopts "orphaned" processes (processes whose parent has exited) and is responsible for `wait`ing on them to prevent "zombies."
+*   **Impact:** This provides a structured, configurable boot process and robust management of background services, bringing PyKOS much closer to the architecture of a modern Linux distribution.
 
-This roadmap outlines a path from a functional command-line OS to a basic graphical, networked system. Each phase introduces fundamental OS concepts and presents significant but achievable engineering challenges, perfectly aligning with the project's educational philosophy.
+This extended roadmap transforms PyKOS into a highly capable and recognizable multi-user, networked operating system. It provides a solid foundation for endless further exploration, from implementing new filesystems to building more complex GUI toolkits or even a web browser.
